@@ -8,10 +8,10 @@
 
 
 A lightweight Windows desktop app (PyQt5) that reminds you to **drink water** and **take standing/moving breaks**.  
-一个轻量的 Windows 桌面应用（基于 PyQt5），用于**提醒喝水**与**久坐起身活动**，支持中英双语、系统托盘、进度记录。
+一个轻量的 Windows 桌面应用（基于 PyQt5），用于**提醒喝水**与**久坐起身活动**，支持中英双语，进度记录，当日健康报告。
 
 **Download / 小助手下载：**  
-➡️ [Click to download app.exe](https://github.com/098765d/PY_healthy-life-assistant/releases/download/v1.0.0/app.exe)
+➡️ [Click to download app.exe](https://github.com/098765d/PY_healthy-life-assistant/releases/download/V0.0.1/default.exe)
 
 ---
 
@@ -59,5 +59,7 @@ A lightweight Windows desktop app (PyQt5) that reminds you to **drink water** an
 
 4) Biswas, A., Oh, P. I., Faulkner, G. E., Bajaj, R. R., Silver, M. A., Mitchell, M. S., & Alter, D. A. (2015). Sedentary time and its association with risk for disease incidence, mortality, and hospitalization in adults: A systematic review and meta-analysis. *Annals of Internal Medicine, 162*(2), 123–132. 
    https://doi.org/10.7326/M14-1651
+
+5) Young, Deborah Rohm, et al. "Sedentary behavior and cardiovascular morbidity and mortality: a science advisory from the American Heart Association." Circulation 134.13 (2016): e262-e279. https://www.ahajournals.org/doi/full/10.1161/CIR.0000000000000440
 
 
