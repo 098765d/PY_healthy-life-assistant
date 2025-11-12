@@ -8,7 +8,7 @@
 
 
 A lightweight Windows desktop app (PyQt5) that reminds you to **drink water** and **take standing/moving breaks**.  
-一个轻量的 Windows 桌面应用（基于 PyQt5），用于**提醒喝水**与**久坐起身活动**，支持中英双语，进度记录，当日健康报告。
+一个轻量的 Windows 桌面应用（PyQt5），用于**提醒喝水**与**久坐起身活动**，支持中英双语、进度记录、**活动记录**与**当日记录报告**。
 
 **Download / 小助手下载：**  
 ➡️ [Click to download app.exe](https://github.com/098765d/PY_healthy-life-assistant/releases/download/V0.0.1/default.exe)
