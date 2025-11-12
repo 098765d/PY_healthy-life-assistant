@@ -47,7 +47,7 @@ A lightweight Windows desktop app (PyQt5) that reminds you to **drink water** an
 2. **Click Start / 点击开始**  
    - 开始后，输入区域将锁定；若需修改，点击**重置**  
    - 右上角 **X** 仅最小化到托盘，不会退出
-3. **Log**  
+3. **Log / 记录**  
    - **记录一口**：累计饮水进度  
    - **记录活动**：增加一次活动计数，并在进度卡片下方显示小图标
 4. **Pause / Resume / 暂停与继续**  
