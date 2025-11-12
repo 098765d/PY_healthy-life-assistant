@@ -17,16 +17,21 @@ A lightweight Windows desktop app (PyQt5) that reminds you to **drink water** an
 
 ## ✨ Features | 功能
 
-- ⏱️ **Hydration reminder** every 1.5h (default) with image popup  
-  **喝水提醒**（默认 1.5 小时）弹窗
-- 🪑 **Anti-sedentary reminder** with GIF popup (custom interval)  
-  **久坐提醒**（自定义间隔）弹窗
-- 📈 **Progress tracking**: daily target + sip size, live progress bar  
-  **进度记录**：每日饮水目标 + 每次饮水量
-- 🛟 **System tray**: start/pause/log sip/quit  
-  **系统托盘**：开始/暂停/记录喝水/退出
+- ⏱️ **Hydration reminder** every **1.5 h (fixed)** with image popup  
+  **喝水提醒**固定 **1.5 小时**（弹窗）
+- 🪑 **Anti-sedentary reminder** with GIF popup (**custom interval**)  
+  **久坐提醒**（弹窗，间隔可选）
+- 📈 **Progress tracking**: daily target + sip size + live bar  
+  **进度记录**：每日饮水目标 / 每次饮水量 / 实时进度条
+- 🚶 **Activity Log**: one-click “Log Activity” adds a small GIF & counter  
+  **活动记录**：点击“记录活动”，增加图标与计数
+- 📝 **Daily Report (TXT)**: press **结束/下班** to export a concise report  
+  **当日报告（TXT）**：点击**结束/下班**导出当日饮水&活动报告
+- ▶️/⏸️ **Accurate pause/resume** (elapsed time excludes pause)  
+  **暂停/继续**计时准确（暂停时长不计入运行时间）
+- 🛟 **System tray**: Show / Pause / Quit  
+  **系统托盘**：显示 / 暂停 / 退出
 - 🌐 **Bilingual UI** (中文 / English)  
-  **界面双语**（中文/英文）
 
 ---
 ## 🎬 Demo| 演示
@@ -35,16 +40,23 @@ A lightweight Windows desktop app (PyQt5) that reminds you to **drink water** an
 
 ![App Screenshot](https://github.com/098765d/PY_healthy-life-assistant/blob/cdef543e96bcce47d38fb67d9955d6c8c4cb136b/%E6%88%AA%E5%9B%BE.png)
 
-## 🧭 Usage Tips | 使用
-
-- 托盘图标右键可**显示主界面、暂停/继续、退出**  
-  Right-click tray icon to **Show / Pause / Log Sip / Quit**
-
-- 第一次启动会弹出“**默认设置**”提示  
-  A toast shows "**Defaults applied**" on first run
-
-- 关闭窗口**不会退出**，程序会最小化到托盘  
-  Closing window **hides to tray** (does not quit)
+## 🧭 Quick Start | 使用
+1. **Set goals / 设定**  
+   - 输入每日饮水目标（ml）与每次饮水量（ml）  
+   - 选择久坐提醒间隔（45/60/75/90 分钟）
+2. **Click Start / 点击开始**  
+   - 开始后，输入区域将锁定；若需修改，点击**重置**  
+   - 右上角 **X** 仅最小化到托盘，不会退出
+3. **Log**  
+   - **记录一口**：累计饮水进度  
+   - **记录活动**：增加一次活动计数，并在进度卡片下方显示小图标
+4. **Pause / Resume / 暂停与继续**  
+   - 暂停后计时冻结；继续后计时准确衔接
+5. **Popups / 弹窗提醒**  
+   - 喝水弹窗持续 **5 秒**，久坐弹窗持续 **7 秒**（可手动关闭或自动消失）
+6. **End of day / 结束当日**  
+   - 点击 **结束/下班** 导出 TXT 报告（文件名示例：`健康报告report_20251112.txt`）
+     
 
 ## 📚 参考资料 / References
 
