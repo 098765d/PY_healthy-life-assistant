@@ -11,14 +11,14 @@ A lightweight Windows desktop app (PyQt5) that reminds you to **drink water** an
 一个轻量的 Windows 桌面应用（PyQt5），用于**提醒喝水**与**久坐起身活动**，支持中英双语、进度记录、**活动记录**与**当日记录报告**。
 
 **Download / 小助手下载：**  
-➡️ [Click to download app.exe](https://github.com/098765d/PY_healthy-life-assistant/releases/download/V0.0.1/default.exe)
+➡️ [Click to download app.exe](https://github.com/098765d/PY_healthy-life-assistant/releases/download/v0.0.2/default.exe)
 
 ---
 
 ## ✨ Features | 功能
 
-- ⏱️ **Hydration reminder** every **1.5 h (fixed)** with image popup  
-  **喝水提醒**固定 **1.5 小时**（弹窗）
+- ⏱️ **Hydration reminder** with image popup  
+  **喝水提醒**（弹窗）
 - 🪑 **Anti-sedentary reminder** with GIF popup (**custom interval**)  
   **久坐提醒**（弹窗，间隔可选）
 - 📈 **Progress tracking**: daily target + sip size + live bar  
