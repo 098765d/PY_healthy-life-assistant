@@ -1,10 +1,12 @@
 # Desk Health Reminder （健康生活小助手）
-[![release](https://img.shields.io/github/v/release/098765d/PY_healthy-life-assistant?label=release)](https://github.com/098765d/PY_healthy-life-assistant/releases)
-[![license](https://img.shields.io/github/license/098765d/PY_healthy-life-assistant)](LICENSE)
-![python](https://img.shields.io/badge/Python-3.x-blue)
-![pyqt5](https://img.shields.io/badge/PyQt-5-brightgreen)
-![platform](https://img.shields.io/badge/Platform-Windows-informational)
-[![Bilibili](https://img.shields.io/badge/Video-Bilibili-ff69b4)](https://www.bilibili.com/video/BV1W7kkBcEuX/?share_source=copy_web&vd_source=f23fdab1cf57871b257305ebe143b9c2)
+
+[![release]( https://img.shields.io/github/v/release/098765d/PY_healthy-life-assistant?label=release) ]( https://github.com/098765d/PY_healthy-life-assistant/releases)
+[![license]( https://img.shields.io/github/license/098765d/PY_healthy-life-assistant) ](LICENSE)
+![python]( https://img.shields.io/badge/Python-3.13.1-blue)
+![pyqt5]( https://img.shields.io/badge/PyQt-5.15.11-brightgreen)
+![platform]( https://img.shields.io/badge/Platform-Windows-informational)
+[![Bilibili](https://img.shields.io/badge/Video-演示视频-ff69b4)]( https://www.bilibili.com/video/BV1W7kkBcEuX/?share_source=copy_web&vd_source=f23fdab1cf57871b257305ebe143b9c2)
+![GitHub Repo stars]( https://img.shields.io/github/stars/098765d/PY_healthy-life-assistant?style=social)
 
 
 A lightweight Windows desktop app (PyQt5) that reminds you to **drink water** and **take standing/moving breaks**.  
