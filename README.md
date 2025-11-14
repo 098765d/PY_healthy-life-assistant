@@ -1,7 +1,7 @@
 # Desk Health Reminder （健康生活小助手）
 
-[![release]( https://img.shields.io/github/v/release/098765d/PY_healthy-life-assistant?label=release) ]( https://github.com/098765d/PY_healthy-life-assistant/releases)
-[![license]( https://img.shields.io/github/license/098765d/PY_healthy-life-assistant) ](LICENSE)
+[![release](https://img.shields.io/github/v/release/098765d/PY_healthy-life-assistant?label=release)](https://github.com/098765d/PY_healthy-life-assistant/releases)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 ![python]( https://img.shields.io/badge/Python-3.13.1-blue)
 ![pyqt5]( https://img.shields.io/badge/PyQt-5.15.11-brightgreen)
 ![platform]( https://img.shields.io/badge/Platform-Windows-informational)
