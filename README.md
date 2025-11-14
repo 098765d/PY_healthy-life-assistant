@@ -60,18 +60,14 @@ A lightweight Windows desktop app (PyQt5) that reminds you to **drink water** an
 
 ## 📚 参考资料 / References
 
-1) 中国营养学会. (2022). 《中国居民膳食指南（2022）》
-   取自 http://dg.cnsoc.org/article/04/wDCyy7cWSJCN6pwKHOo5Dw.html
+1. Jacques, P. F., Rogers, G., Stookey, J. D., & Perrier, E. T. (2021). Water intake and markers of hydration are related to cardiometabolic risk biomarkers in community-dwelling older adults: a cross-sectional analysis. The Journal of Nutrition, 151(10), 3205-3213.
+2. Ku, P. W., Steptoe, A., Liao, Y., Hsueh, M. C., & Chen, L. J. (2019). A threshold of objectively-assessed daily sedentary time for all-cause mortality in older adults: a meta-regression of prospective cohort studies. Journal of clinical medicine, 8(4), 564.
+3. Mazaheri-Tehrani, S., Arefian, M., Abhari, A. P., Riahi, R., Vahdatpour, B., Mahdavi, S. B., & Kelishadi, R. (2023). Sedentary behavior and neck pain in adults: A systematic review and meta-analysis. Preventive Medicine, 175, 107711.
+4. Wittbrodt, M. T., & Millard-Stafford, M. (2018). Dehydration impairs cognitive performance: a meta-analysis. Med Sci Sports Exerc, 50 (11), 2360-2368.
+5. Wilmot, E. G., Edwardson, C. L., Achana, F. A., Davies, M. J., Gorely, T., Gray, L. J., ... & Biddle, S. J. (2012). Sedentary time in adults and the association with diabetes, cardiovascular disease and death: systematic review and meta-analysis. Diabetologia, 55(11), 2895-2905.
+6. Young, D. R., Hivert, M. F., Alhassan, S., Camhi, S. M., Ferguson, J. F., Katzmarzyk, P. T., ... & Yong, C. M. (2016). Sedentary behavior and cardiovascular morbidity and mortality: a science advisory from the American Heart Association. Circulation, 134(13), e262-e279.
+7. Wang, J. S., Chiang, H. Y., Chen, H. L., Flores, M., Navas-Acien, A., & Kuo, C. C. (2022). Association of water intake and hydration status with risk of kidney stone formation based on NHANES 2009–2012 cycles. Public Health Nutrition, 25(9), 2403-2414.
+8. 中国营养学会. (2022). 《中国居民膳食指南（2022）》 取自 http://dg.cnsoc.org/article/04/wDCyy7cWSJCN6pwKHOo5Dw.html
 
-2) World Health Organization. (2020). Guidelines on physical activity and sedentary behaviour.
-   https://www.who.int/publications/i/item/9789240015128
-
-3) EFSA Panel on Dietetic Products, Nutrition and Allergies (NDA). (2010). Scientific Opinion on Dietary Reference Values for water. *EFSA Journal, 8*(3), 1459. 
-   https://efsa.onlinelibrary.wiley.com/doi/10.2903/j.efsa.2010.1459
-
-4) Biswas, A., Oh, P. I., Faulkner, G. E., Bajaj, R. R., Silver, M. A., Mitchell, M. S., & Alter, D. A. (2015). Sedentary time and its association with risk for disease incidence, mortality, and hospitalization in adults: A systematic review and meta-analysis. *Annals of Internal Medicine, 162*(2), 123–132. 
-   https://doi.org/10.7326/M14-1651
-
-5) Young, Deborah Rohm, et al. "Sedentary behavior and cardiovascular morbidity and mortality: a science advisory from the American Heart Association." Circulation 134.13 (2016): e262-e279. https://www.ahajournals.org/doi/full/10.1161/CIR.0000000000000440
 
 
