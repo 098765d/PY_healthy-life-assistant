@@ -37,9 +37,7 @@ A lightweight Windows desktop app (PyQt5) that reminds you to **drink water** an
 ---
 ## 🎬 Demo| 演示
 
-[【自制软件】办公久坐救星！Python做的桌面健康小助手：提醒喝水＋久坐弹窗＋进度统计](https://www.bilibili.com/video/BV1W7kkBcEuX/?share_source=copy_web&vd_source=f23fdab1cf57871b257305ebe143b9c2)
-
-![App Screenshot](https://github.com/098765d/PY_healthy-life-assistant/blob/2fea5563fe65d1bfbb45f20aa494f3860aeba6a0/%E6%88%AA%E5%9B%BE.png)
+[![演示视频](https://github.com/098765d/PY_healthy-life-assistant/blob/2fea5563fe65d1bfbb45f20aa494f3860aeba6a0/%E6%88%AA%E5%9B%BE.png)](https://www.bilibili.com/video/BV1W7kkBcEuX/)
 
 ## 🧭 Quick Start | 使用
 1. **Set goals / 设定**  
