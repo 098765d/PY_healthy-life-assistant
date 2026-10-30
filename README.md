@@ -8,12 +8,13 @@
 
 ## ⬇️ 下载
 
-### 👉 [**点这里下载 健康生活小助手.exe**](https://github.com/098765d/PY_healthy-life-assistant/releases/latest/download/%E5%81%A5%E5%BA%B7%E7%94%9F%E6%B4%BB%E5%B0%8F%E5%8A%A9%E6%89%8B.exe)
+### 👉 [**点这里下载 健康生活小助手**](https://github.com/098765d/PY_healthy-life-assistant/releases/latest/download/HealthyLifeAssistant.exe)
 
-> 直接下载地址（可复制到浏览器）：
+> **直接下载地址**（复制到浏览器地址栏也能下）：
 > ```
-> https://github.com/098765d/PY_healthy-life-assistant/releases/latest/download/健康生活小助手.exe
+> https://github.com/098765d/PY_healthy-life-assistant/releases/latest/download/HealthyLifeAssistant.exe
 > ```
+> 下载下来的文件名是 `HealthyLifeAssistant.exe`，就是**健康生活小助手**本体，双击即用。
 > 想手动挑版本：[**全部 Releases**](https://github.com/098765d/PY_healthy-life-assistant/releases)
 
 | 项目 | 说明 |
