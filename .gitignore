@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# PyInstaller
+build/
+dist/
+*.manifest
+
+# 本地环境 / 编辑器
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 本地配置与数据（不该进仓库）
+settings.json
+log.csv
+report_*.html
