@@ -22,10 +22,11 @@ from typing import Callable, Optional
 
 from PyQt5.QtCore import (
     QEasingCurve, QEvent, QPointF, QPropertyAnimation, QRectF, QSize, Qt, QTimer,
+    QVariantAnimation,
 )
 from PyQt5.QtGui import (
     QBrush, QColor, QCursor, QFont, QFontMetrics, QIcon, QLinearGradient,
-    QPainter, QPainterPath, QPen, QPixmap, QPolygonF,
+    QPainter, QPainterPath, QPen, QPixmap, QPolygonF, QRadialGradient,
 )
 from PyQt5.QtWidgets import (
     QApplication, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel,
@@ -1079,6 +1080,335 @@ class CountRow(QWidget):
         self.bar.set_value(1 - remain / max(1, interval))
 
 
+# ------------------------------ 悬浮球 ------------------------------ #
+
+class FloatingOrb(QWidget):
+    """76px 全局悬浮球：60px 球体 + 44px 居中 logo + 双倒计时弧。
+
+    左键在运行中暂停、暂停中继续，待机时打开主窗口；拖动和右键菜单独立。
+    本类只呈现 MainWindow 同步来的状态，不保存或修改任何统计数据。
+    """
+
+    SIZE = 76
+    BALL = 60
+    LOGO = 44
+    BLUE = "#3B82F6"
+    ORANGE = "#F97316"
+
+    def __init__(self, on_primary: Callable[[], None], menu: QMenu):
+        super().__init__(
+            None,
+            Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool,
+        )
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.setFixedSize(self.SIZE, self.SIZE)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setMouseTracking(True)
+        self.setAttribute(Qt.WA_Hover, True)
+
+        # 不能把 QGraphicsDropShadowEffect 挂在顶层窗口：离屏缓存会让这个小窗
+        # 的 hover / 动画重绘明显卡顿。阴影只预绘一次，之后每帧贴一张 76px 位图。
+        self._shadow_pm = self._make_shadow()
+
+        self._on_primary = on_primary
+        self._menu = menu
+        self._running = False
+        self._paused = False
+        self._water_ratio = 1.0
+        self._sed_ratio = 1.0
+        self._press_offset = None
+        self._dragging = False
+        self._hovered = False
+        self._hover = 0.0
+        self._feedback_kind: Optional[str] = None
+        self._feedback_step = 0
+
+        self._logo = QPixmap()
+        for name in ("images/logo.png", "images/logo.ico"):
+            path = resource_path(name)
+            if os.path.exists(path):
+                pm = QPixmap(path)
+                if not pm.isNull():
+                    # 预先缩到小尺寸：不要每次 hover 重绘都从 1024px 原图重采样。
+                    self._logo = pm.scaled(
+                        self.LOGO * 3, self.LOGO * 3,
+                        Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    break
+
+        self._hover_anim = QVariantAnimation(self)
+        self._hover_anim.setDuration(150)
+        self._hover_anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._hover_anim.valueChanged.connect(self._on_hover_value)
+
+        self._click = 0.0
+        self._click_anim = QVariantAnimation(self)
+        self._click_anim.setDuration(200)
+        self._click_anim.setStartValue(0.0)
+        self._click_anim.setEndValue(1.0)
+        self._click_anim.valueChanged.connect(self._on_click_value)
+
+        self._feedback_timer = QTimer(self)
+        self._feedback_timer.setInterval(35)
+        self._feedback_timer.timeout.connect(self._advance_feedback)
+        self._update_tooltip()
+        self._move_to_default()
+
+    def _make_shadow(self) -> QPixmap:
+        """一次性生成柔和投影，替代昂贵的顶层 QGraphicsEffect。"""
+        pm = QPixmap(self.SIZE, self.SIZE)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        center = QPointF(self.SIZE / 2, self.SIZE / 2 + 4)
+        gradient = QRadialGradient(center, 37)
+        gradient.setColorAt(0.0, QColor(0, 0, 0, 45))
+        gradient.setColorAt(0.72, QColor(0, 0, 0, 28))
+        gradient.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(gradient))
+        p.drawEllipse(QRectF(1, 4, self.SIZE - 2, self.SIZE - 5))
+        p.end()
+        return pm
+
+    def _move_to_default(self) -> None:
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            return
+        area = screen.availableGeometry()
+        self.move(area.right() - self.width() - 28,
+                  area.bottom() - self.height() - 150)
+
+    def _update_tooltip(self) -> None:
+        if not self._running:
+            primary = "左键打开"
+        else:
+            primary = "左键继续" if self._paused else "左键暂停"
+        self.setToolTip(f"健康生活小助手\n{primary} · 拖动移动 · 右键菜单")
+
+    def set_progress(self, water: float, sed: float, running: bool) -> None:
+        """传入剩余时间比例：1 = 刚到起点，0 = 到点。暂停时数值自然冻结。"""
+        water = max(0.0, min(1.0, water))
+        sed = max(0.0, min(1.0, sed))
+        changed = running != self._running
+        self._running = running
+        self._water_ratio = water
+        self._sed_ratio = sed
+        if changed:
+            self._update_tooltip()
+        self.update()
+
+    def set_paused(self, paused: bool) -> None:
+        """暂停是持续状态；悬停时暂停符号切换为播放符号。"""
+        if self._paused == paused:
+            return
+        self._paused = paused
+        if paused:
+            self._feedback_timer.stop()
+            self._feedback_kind = None
+        self._update_tooltip()
+        self.click_feedback()
+        self.update()
+
+    def click_feedback(self) -> None:
+        """单击或状态切换后给一圈 200ms 的确认扩散，不让操作显得无响应。"""
+        self._click_anim.stop()
+        self._click = 0.0
+        self._click_anim.start()
+
+    def _on_click_value(self, value) -> None:
+        self._click = float(value)
+        self.update()
+
+    def feedback(self, kind: str) -> None:
+        """真实记录成功后短暂显示水滴 / 人形，并扩散一圈同色涟漪。"""
+        if kind not in ("drop", "person"):
+            return
+        self._feedback_kind = kind
+        self._feedback_step = 0
+        self._feedback_timer.start()
+        self.update()
+
+    def _advance_feedback(self) -> None:
+        self._feedback_step += 1
+        if self._feedback_step >= 26:
+            self._feedback_timer.stop()
+            self._feedback_kind = None
+        self.update()
+
+    def _on_hover_value(self, value) -> None:
+        self._hover = float(value)
+        self.update()
+
+    def _animate_hover(self, target: float) -> None:
+        self._hover_anim.stop()
+        self._hover_anim.setStartValue(self._hover)
+        self._hover_anim.setEndValue(target)
+        self._hover_anim.start()
+
+    def enterEvent(self, e) -> None:
+        self._hovered = True
+        self._animate_hover(1.0)
+        self.update()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e) -> None:
+        self._hovered = False
+        self._animate_hover(0.0)
+        self.update()
+        super().leaveEvent(e)
+
+    def _draw_logo(self, p: QPainter, base: QRectF) -> None:
+        p.save()
+        clip = QPainterPath()
+        clip.addEllipse(base)
+        p.setClipPath(clip)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(255, 255, 255))
+        p.drawEllipse(base)
+        if not self._logo.isNull():
+            # 图标严格 44×44 居中，四周保留 8px 球体内边距。
+            logo_rect = QRectF(0, 0, self.LOGO, self.LOGO)
+            logo_rect.moveCenter(base.center())
+            p.drawPixmap(logo_rect, self._logo, QRectF(self._logo.rect()))
+        p.restore()
+
+    def paintEvent(self, _e) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        base = QRectF(8, 8, self.BALL, self.BALL)
+        p.drawPixmap(0, 0, self._shadow_pm)
+
+        # 微缩放只改变绘制，不改变 76px 窗口和拖拽命中区域。
+        center = base.center()
+        scale = 1.0 + 0.08 * self._hover
+        p.save()
+        p.translate(center)
+        p.scale(scale, scale)
+        p.translate(-center)
+
+        if self._hover > 0.001:                   # 150ms 展开的 5px 呼吸光晕
+            halo = QColor(59, 130, 246, int(76 * self._hover))
+            p.setPen(QPen(halo, 5))
+            p.setBrush(Qt.NoBrush)
+            spread = 2.5 + 1.5 * self._hover
+            p.drawEllipse(base.adjusted(-spread, -spread, spread, spread))
+
+        kind = self._feedback_kind
+        if kind is None:
+            if self._paused:
+                kind = "play" if self._hovered else "pause"
+            elif self._running and self._hovered:
+                kind = "pause"                    # 明示单击将暂停
+            else:
+                kind = "logo"
+
+        if kind in ("drop", "person"):
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(self.BLUE if kind == "drop" else self.ORANGE))
+            p.drawEllipse(base)
+            inner = base.adjusted(17, 16, -17, -16)
+            draw_glyph(p, inner, kind, QColor(255, 255, 255))
+        else:
+            self._draw_logo(p, base)
+            if kind in ("pause", "play"):
+                # 保留 logo，只覆盖半透明深色层，不用实心灰球替换。
+                p.setPen(Qt.NoPen)
+                p.setBrush(QColor(30, 41, 59, 166))
+                p.drawEllipse(base)
+                p.setBrush(QColor(255, 255, 255))
+                c = base.center()
+                if kind == "pause":
+                    p.drawRoundedRect(QRectF(c.x() - 10, c.y() - 11, 7, 22), 3, 3)
+                    p.drawRoundedRect(QRectF(c.x() + 3, c.y() - 11, 7, 22), 3, 3)
+                else:
+                    p.drawPolygon(QPolygonF([
+                        QPointF(c.x() - 7, c.y() - 12),
+                        QPointF(c.x() + 12, c.y()),
+                        QPointF(c.x() - 7, c.y() + 12),
+                    ]))
+
+        # 1.5px 半透明高光内描边，强化球体与深色壁纸之间的分离感。
+        p.setPen(QPen(QColor(255, 255, 255, 170), 1.5))
+        p.setBrush(Qt.NoBrush)
+        p.drawEllipse(base.adjusted(0.75, 0.75, -0.75, -0.75))
+
+        # 外圈轨道常驻；运行时左半蓝弧=喝水剩余，右半橙弧=起身剩余。
+        ring = base.adjusted(-2, -2, 2, 2)
+        width = 3.0 + self._hover                 # Hover 时由 3px 加粗到 4px
+        p.setPen(QPen(QColor(226, 232, 240, 204), width))
+        p.drawEllipse(ring)
+        if self._running:
+            alpha = 120 if self._paused else 255
+            water = QColor(self.BLUE)
+            water.setAlpha(alpha)
+            pen = QPen(water, width)
+            pen.setCapStyle(Qt.RoundCap)
+            p.setPen(pen)
+            p.drawArc(ring, 90 * 16, int(180 * 16 * self._water_ratio))
+            sed = QColor(self.ORANGE)
+            sed.setAlpha(alpha)
+            pen = QPen(sed, width)
+            pen.setCapStyle(Qt.RoundCap)
+            p.setPen(pen)
+            p.drawArc(ring, 90 * 16, -int(180 * 16 * self._sed_ratio))
+
+        if 0.001 < self._click < 0.999:            # 200ms 单击确认脉冲
+            pulse = QColor(59, 130, 246, int(150 * (1 - self._click)))
+            p.setPen(QPen(pulse, 2.4))
+            spread = 3 + self._click * 5
+            p.drawEllipse(base.adjusted(-spread, -spread, spread, spread))
+
+        if self._feedback_kind is not None:         # 约 0.9 秒记录反馈
+            progress = self._feedback_step / 26.0
+            spread = 2 + progress * 6
+            ring_color = QColor(self.BLUE if self._feedback_kind == "drop" else self.ORANGE)
+            ring_color.setAlpha(max(0, int(150 * (1 - progress))))
+            p.setPen(QPen(ring_color, 2.2))
+            p.drawEllipse(base.adjusted(-spread, -spread, spread, spread))
+        p.restore()
+
+    def contextMenuEvent(self, e) -> None:
+        self._menu.exec_(e.globalPos())
+        e.accept()
+
+    def mousePressEvent(self, e) -> None:
+        if e.button() == Qt.LeftButton:
+            self._press_offset = e.globalPos() - self.frameGeometry().topLeft()
+            self._dragging = False
+            e.accept()
+        else:
+            super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e) -> None:
+        if self._press_offset is not None and e.buttons() & Qt.LeftButton:
+            target = e.globalPos() - self._press_offset
+            if (target - self.frameGeometry().topLeft()).manhattanLength() > 3:
+                self._dragging = True
+            if self._dragging:
+                screen = QApplication.screenAt(e.globalPos()) or QApplication.primaryScreen()
+                if screen is not None:
+                    area = screen.availableGeometry()
+                    target.setX(max(area.left(), min(target.x(), area.right() - self.width() + 1)))
+                    target.setY(max(area.top(), min(target.y(), area.bottom() - self.height() + 1)))
+                self.move(target)
+            e.accept()
+        else:
+            super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e) -> None:
+        if e.button() == Qt.LeftButton and self._press_offset is not None:
+            was_dragging = self._dragging
+            self._press_offset = None
+            self._dragging = False
+            if not was_dragging:
+                self._on_primary()
+            e.accept()
+        else:
+            super().mouseReleaseEvent(e)
+
+
 # ------------------------------ 主窗口 ------------------------------ #
 
 class MainWindow(QWidget):
@@ -1113,6 +1443,7 @@ class MainWindow(QWidget):
         self._build_ui()
         self._build_toast()
         self._build_tray()
+        self._build_floating()
 
         self._timer = QTimer(self)
         self._timer.setInterval(TICK_MS)
@@ -1289,6 +1620,29 @@ class MainWindow(QWidget):
         self.tray.setContextMenu(menu)
         self.tray.show()
 
+    def _build_floating(self) -> None:
+        # 与托盘共用同一个 QMenu：菜单项的可用状态、文案和槽函数始终一致。
+        self.floating = FloatingOrb(self._on_floating_primary, self._menu)
+        # 每次从托盘或悬浮球展开菜单前都重新同步，暂停时记录项必定禁用。
+        self._menu.aboutToShow.connect(self._refresh_buttons)
+        self.floating.show()
+
+    def _on_floating_primary(self) -> None:
+        """悬浮球单击：运行中暂停，暂停中继续；尚未开始时打开主窗口。"""
+        if self.running:
+            self._toggle_pause()
+        else:
+            self._show_window()
+
+    def _update_floating_progress(self) -> None:
+        if not self.running:
+            self.floating.set_progress(1.0, 1.0, False)
+            return
+        now = self._elapsed()
+        water = (self._next_water - now) / max(1, self._water_interval)
+        sed = (self._next_sed - now) / max(1, self._sed_interval)
+        self.floating.set_progress(water, sed, True)
+
     # ---------------------------- 状态切换 ---------------------------- #
 
     def _apply_mode(self, mode: str) -> None:
@@ -1331,6 +1685,8 @@ class MainWindow(QWidget):
             self.act_toggle.setText("继续" if self.paused else "暂停")
         self.act_sip.setEnabled(can_log)
         self.act_stand.setEnabled(can_log)
+        self.floating.set_paused(self.running and self.paused)
+        self._update_floating_progress()
 
     def _refresh_stats(self) -> None:
         if self.settings.roll_day():
@@ -1409,6 +1765,7 @@ class MainWindow(QWidget):
         now = self._elapsed()
         self.row_sed.set_remain(int(self._next_sed - now), self._sed_interval, self.paused)
         self.row_water.set_remain(int(self._next_water - now), self._water_interval, self.paused)
+        self._update_floating_progress()
         if self.paused:
             return
 
@@ -1589,6 +1946,8 @@ class MainWindow(QWidget):
         self._confirm("已记录喝水",
                       f"今日已饮水 {self.settings.today_ml} ml"
                       f"（{self.settings.today_sips} 次）")
+        self._update_floating_progress()
+        self.floating.feedback("drop")
 
     def _log_stand(self) -> None:
         if not self.running or self.paused:
@@ -1602,6 +1961,8 @@ class MainWindow(QWidget):
         log_event("stand")
         self._confirm("已记录起身",
                       f"今日已起身活动 {self.settings.today_stands} 次")
+        self._update_floating_progress()
+        self.floating.feedback("person")
 
     # ---------------------------- 报告 ---------------------------- #
 
@@ -1709,6 +2070,7 @@ class MainWindow(QWidget):
         self._reset_today(notify=False)
         self.toast.hide()
         self.tray.hide()
+        self.floating.close()
         QApplication.quit()
 
     def closeEvent(self, event) -> None:
