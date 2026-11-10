@@ -18,12 +18,13 @@ import time
 import webbrowser
 from dataclasses import dataclass
 from datetime import date, datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Optional
 
 from PyQt5.QtCore import (
-    QEasingCurve, QEvent, QPointF, QPropertyAnimation, QRectF, QSize, Qt, QTimer,
-    QVariantAnimation,
+    QAbstractAnimation, QEasingCurve, QEvent, QPointF, QPropertyAnimation,
+    QRectF, QSize, Qt, QTimer, QVariantAnimation,
 )
 from PyQt5.QtGui import (
     QBrush, QColor, QCursor, QFont, QFontMetrics, QIcon, QLinearGradient,
@@ -58,6 +59,131 @@ ACCENT_SED = "#FF7A00"     # 活力橙
 TINT_WATER = "#EAF3FE"     # 喝水分组卡底色
 TINT_SED = "#FDF2E6"       # 久坐分组卡底色
 INK = "#0B1B2B"
+
+
+# ---------------------- 息屏 / 唤醒后的窗口自愈 ---------------------- #
+
+def is_off_screen(widget: QWidget) -> bool:
+    """窗口是否已完全落在所有屏幕的可用区之外。
+
+    额外：中心点落在任何屏幕之外也视为离屏——拔掉副屏后窗口常停在
+    幽灵坐标（仍 Visible、未最小化），只靠 intersects 偶尔会误判。
+    """
+    rect = widget.frameGeometry()
+    if QApplication.screenAt(rect.center()) is None:
+        return True
+    for screen in QApplication.screens():
+        if screen.availableGeometry().intersects(rect):
+            return False
+    return True
+
+
+def _target_screen_for(widget: QWidget, prefer_cursor: bool = False):
+    """挑选窗口该落到的屏幕：优先当前所在屏，其次鼠标所在屏，最后主屏。
+
+    多显示器 + 息屏唤醒后，primaryScreen() 未必是用户正在看的那块；
+    只用主屏会把球送到另一块屏的角落，看起来就像「球跑掉了」。
+
+    prefer_cursor=True：托盘「显示窗口」时用。窗口可能还停在已拔掉的
+    显示器幽灵坐标上，screenAt(窗口中心) 会是 None 或旧拓扑；此时应跟
+    鼠标/主屏，而不是留在屏幕外。
+    """
+    if not prefer_cursor:
+        screen = QApplication.screenAt(widget.frameGeometry().center())
+        if screen is not None:
+            return screen
+    screen = QApplication.screenAt(QCursor.pos())
+    if screen is not None:
+        return screen
+    return QApplication.primaryScreen()
+
+
+def clamp_onto_screen(widget: QWidget, margin: int = 48) -> bool:
+    """把窗口拉回可见区域，返回是否发生了移动。
+
+    息屏唤醒后显示器可能换了分辨率或 DPI 缩放，窗口记录的坐标会落在
+    新的可用区之外——此时 show()/raise_() 都「成功」了，但窗口在屏幕外，
+    用户看到的就是「点了显示窗口却没反应」。
+    """
+    screen = _target_screen_for(widget)
+    if screen is None:
+        return False
+    area = screen.availableGeometry()
+    w, h = widget.width(), widget.height()
+    x, y = widget.x(), widget.y()
+
+    if w <= area.width():
+        # 装得下就完整放进来，保证整窗可见。
+        nx = max(area.left(), min(x, area.right() - w + 1))
+    else:
+        # 比屏幕还宽：至少留 margin 宽的可点区域。
+        nx = max(area.left() - w + margin, min(x, area.right() - margin))
+    if h <= area.height():
+        ny = max(area.top(), min(y, area.bottom() - h + 1))
+    else:
+        ny = max(area.top(), min(y, area.bottom() - margin))
+
+    if (nx, ny) != (x, y):
+        widget.move(nx, ny)
+        return True
+    return False
+
+
+def center_on_screen(widget: QWidget, prefer_cursor: bool = False) -> bool:
+    """把窗口居中放到目标屏幕，返回是否发生了移动。
+
+    用于「整窗已跑到所有屏幕之外」的情况：单纯 clamp 会把它贴到屏幕
+    左上角，视觉上像「窗口卡在边角」，居中更符合用户点「显示窗口」
+    之后的预期。
+    """
+    screen = _target_screen_for(widget, prefer_cursor=prefer_cursor)
+    if screen is None:
+        return False
+    area = screen.availableGeometry()
+    nx = area.left() + max(0, (area.width() - widget.width()) // 2)
+    ny = area.top() + max(0, (area.height() - widget.height()) // 2)
+    if (nx, ny) != (widget.x(), widget.y()):
+        widget.move(nx, ny)
+        return True
+    return False
+
+
+def refresh_native_window(widget: QWidget, force: bool = False) -> None:
+    """强制 Windows 重建分层窗口表面，修复唤醒后「有窗口但一片空白」。
+
+    MainWindow / FloatingOrb / Toast 都因 WA_TranslucentBackground 变成
+    WS_EX_LAYERED 分层窗口。显示器休眠、会话锁定或 GPU 设备重置会让它的
+    表面失效，Qt 侧 isVisible() 仍为 True，屏幕却什么都不画。隐藏再显示
+    会驱动 Qt 重新创建 backing store，这是最小侵入的修复方式。
+
+    force=True：锁屏 / 息屏后系统可能把 Qt.Tool 窗真正藏掉（isVisible 变
+    False）。此时先 show 再重建，否则早期 return 会让悬浮球永久消失。
+    """
+    if not widget.isVisible():
+        if not force:
+            return
+        widget.show()
+    widget.hide()
+    QApplication.processEvents()
+    widget.show()
+
+
+def _send_wake_redraw(widget: QWidget) -> None:
+    """直接给 HWND 发一次重绘与层级刷新，逼 Windows 重新合成图层。"""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        hwnd = int(widget.winId())
+        user32 = ctypes.windll.user32
+        WM_PAINT = 0x000F
+        RDW_INVALIDATE, RDW_ALLCHILDREN, RDW_UPDATENOW = 0x0001, 0x0080, 0x0100
+        user32.RedrawWindow(hwnd, None, None,
+                            RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW)
+        user32.SendMessageW(hwnd, WM_PAINT, 0, 0)
+    except Exception:
+        pass
+
 SUB = "#8A94A6"
 DIM_COLOR = "#B9C2D0"
 
@@ -415,6 +541,13 @@ def ui_font(size: int, bold: bool = False) -> QFont:
     if bold:
         f.setWeight(QFont.DemiBold)
     return f
+
+
+@lru_cache(maxsize=512)
+def text_width(text: str, size: int, bold: bool = False) -> int:
+    """缓存字宽：胶囊宽度按内容算，展开动画每帧都会查，不该重复构造 QFont。"""
+    fm = QFontMetrics(ui_font(size, bold))
+    return getattr(fm, "horizontalAdvance", fm.width)(text)
 
 
 def draw_glyph(p: QPainter, r: QRectF, kind: str, color: QColor) -> None:
@@ -1084,27 +1217,40 @@ class CountRow(QWidget):
 # ------------------------------ 悬浮球 ------------------------------ #
 
 class FloatingOrb(QWidget):
-    """220×162 透明画布：主球 + 两枚卫星子球 + 顶部进度胶囊。
+    """316×162 透明画布：主球 + 两枚卫星子球 + 目标完成度胶囊。
 
     主球保留原有手势：单击暂停 / 继续、拖动移动窗口、右键复用托盘菜单。
     鼠标进入主球圆形范围后，两枚子球以 180ms OutBack 从球心弹出；单击
     子球完成打卡，回调 ``on_checkin(kind)`` 返回胶囊文案，返回 None 表示
     当前不可记录。本类只呈现状态，不保存或修改任何统计数据。
 
-    几何约束（放大版）：主球 r=38、子球 r=25、两子球圆心距 60。
-    胶囊底边 34，上子球顶边 39，留 5px；下子球底边 149，画布底留 13px。
+    展开后在每颗子球外侧再弹出一枚胶囊，显示「今日已完成 / 目标」的
+    百分比与两行明细（已喝 1200ml / 目标 1900ml）。
+
+    几何约束：主球 r=38、子球 r=25、两子球圆心距 60。胶囊宽 162、高 34，
+    与子球外缘留 6px。为了让胶囊放得下，画布由 220 加宽到 316：主球靠右
+    时多出的 96px 在左侧，靠左时在右侧，因此主球到窗口相应边缘的距离
+    始终是 44，`_update_side(compensate=True)` 换边时主球视觉位置不动。
     """
 
-    CANVAS_W = 220
+    CANVAS_W = 316
     CANVAS_H = 162
     BALL = 76
     LOGO = 56
     SATELLITE = 50
-    LEFT_CX = 44                 # 主球靠左：子球向右侧弹出
-    RIGHT_CX = 176               # 主球靠右：子球向左侧弹出（= CANVAS_W - LEFT_CX）
+    LEFT_CX = 44                 # 主球靠左：子球与胶囊向右侧弹出
+    RIGHT_CX = 272               # 主球靠右：子球与胶囊向左侧弹出（= CANVAS_W - 44）
     CY = 94
     SAT_DX = 72                  # 主球圆心 → 子球圆心水平距离
     SAT_DY = 30                  # 子球相对主球圆心的上下偏移
+    CHIP_W = 162                 # 目标完成度胶囊：最大宽度上限（画布按此预留）
+    CHIP_H = 34
+    CHIP_GAP = 6                 # 子球外缘到胶囊的间距
+    CHIP_PAD = 11                # 胶囊左右内边距
+    CHIP_TEXT_GAP = 12           # 明细文字与百分比之间的固定间距
+    BALL_IDLE = 0.5              # 常态主球半径倍率（相对全尺寸）
+    BALL_ACTIVE = 1.0            # 悬停 / 提醒闪烁时的倍率
+    BALL_ANIM_MS = 150           # 常态 ↔ 全尺寸的过渡时长
     BUBBLE_TOP = 4
     BUBBLE_H = 30
     MAIN_HIT = 40                # 主球命中半径（r=38 + 2）
@@ -1140,10 +1286,26 @@ class FloatingOrb(QWidget):
         self._on_checkin = on_checkin
         self._menu = menu
 
+        # 主球常态只有一半半径；悬停、展开或提醒闪烁时放大到全尺寸。
+        # 窗口与画布尺寸不变，只缩放绘制与输入热区，避免换边 / 拖动逻辑失调。
+        self._ball_scale = self.BALL_IDLE
+        self._ball_target = self.BALL_IDLE
+        self._ball_anim = QVariantAnimation(self)
+        self._ball_anim.setDuration(self.BALL_ANIM_MS)
+        self._ball_anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._ball_anim.valueChanged.connect(self._on_ball_value)
+
         self._running = False
         self._paused = False
         self._water_ratio = 1.0
         self._sed_ratio = 1.0
+
+        # 目标完成度（今日已完成 / 目标），只做展示，由 MainWindow 推入。
+        self._done_water = 0
+        self._goal_water = 0
+        self._done_stand = 0
+        self._goal_stand = 0
+        self._chip_p = 0.0            # 胶囊弹出进度，跟随 _expand
 
         self._right_side = True       # 默认贴屏幕右侧：主球靠右、子球向左
         self._expand = 0.0            # 0 = 收起，1 = 完全展开（OutBack 可短暂过冲）
@@ -1269,8 +1431,55 @@ class FloatingOrb(QWidget):
         return QPointF(c.x() + (target.x() - c.x()) * t,
                        c.y() + (target.y() - c.y()) * t)
 
+    def _chip_metrics(self, kind: str):
+        """返回 (百分比文字, 第一行, 第二行, 百分比宽, 明细宽)。
+
+        宽度按实际文字算，胶囊才不会在「0% / 已喝 0ml」这种短内容下
+        留一大段空白；缓存过的 text_width 让展开动画每帧都能廉价调用。
+        """
+        pct, first, second = self._chip_values(kind)
+        pct_text = f"{pct}%"
+        pct_w = text_width(pct_text, 17, True)
+        detail_w = max(text_width(first, 8), text_width(second, 8))
+        return pct_text, first, second, pct_w, detail_w
+
+    def _chip_width(self, kind: str) -> int:
+        _pct_text, _first, _second, pct_w, detail_w = self._chip_metrics(kind)
+        actual = self.CHIP_PAD * 2 + self.CHIP_TEXT_GAP + pct_w + detail_w
+        return int(min(self.CHIP_W, max(96, actual)))
+
+    def _chip_rect(self, kind: str) -> QRectF:
+        """子球外缘外侧的目标完成度胶囊，宽度随文字内容收紧。
+
+        靠子球的一端固定，另一端随宽度伸缩：视觉上胶囊始终贴着子球，
+        只是内容少时更短。`_right_side` 时在主球左侧、反之在右侧。
+        两个胶囊上下互不重叠：上下子球圆心相差 60，胶囊高 34，余量 26。
+        """
+        center = self._sat_position(kind)
+        width = self._chip_width(kind)
+        sign = -1.0 if self._right_side else 1.0
+        edge = center.x() + sign * (self.SATELLITE / 2.0 + self.CHIP_GAP)
+        left = edge - width if sign < 0 else edge
+        return QRectF(left, center.y() - self.CHIP_H / 2.0,
+                      width, self.CHIP_H)
+
+    def _chip_values(self, kind: str):
+        """返回 (percent, 第一行, 第二行)；未开始计时时没有目标可谈。"""
+        if kind == "water":
+            done, goal = self._done_water, self._goal_water
+            first = f"已喝 {done}ml"
+            second = f"目标 {goal}ml"
+        else:
+            done, goal = self._done_stand, self._goal_stand
+            first = f"已起身 {done} 次"
+            second = f"目标 {goal} 次"
+        goal = max(1, goal)
+        pct = int(round(max(0.0, min(1.5, done / goal)) * 100))
+        return pct, first, second
+
     def _hit_test(self, pos: QPointF) -> Optional[str]:
-        if self._dist(pos, self._main_center()) <= self.MAIN_HIT:
+        # 常态球只有一半半径，命中半径同步缩小，避免「还没碰到球就放大」。
+        if self._dist(pos, self._main_center()) <= self.MAIN_HIT * self._ball_scale:
             return "main"
         if self._expand > 0.55:
             for kind in ("water", "stand"):
@@ -1281,6 +1490,10 @@ class FloatingOrb(QWidget):
                     radius = self.SATELLITE * 1.15 / 2 + 2
                 if self._dist(pos, self._sat_position(kind)) <= radius:
                     return kind
+                # 胶囊紧贴子球，视觉上是一个整体；点在胶囊上等同于点子球，
+                # 否则用户会觉得「标了百分比的那块点不动」。
+                if self._chip_p > 0.5 and self._chip_rect(kind).contains(pos):
+                    return kind
         return None
 
     def _refresh_mask(self) -> None:
@@ -1289,7 +1502,8 @@ class FloatingOrb(QWidget):
         不加遮罩的话，这块透明矩形会把下方应用的点击一起吃掉。
         """
         c = self._main_center()
-        r = self.BALL // 2 + 16
+        # 热区随主球缩放：全尺寸 54、常态 35，收起时不在屏幕上留点击死区。
+        r = int(self.BALL / 2.0 * self._ball_scale + 16)
         # 圆必须被画布裁一遍：主球靠左时热区会探出画布左侧。
         main_rect = QRegion(int(c.x() - r), int(c.y() - r), r * 2, r * 2,
                             QRegion.Ellipse).intersected(
@@ -1301,6 +1515,14 @@ class FloatingOrb(QWidget):
                 region = region.united(QRegion(
                     int(target.x() - rr), int(target.y() - rr),
                     rr * 2, rr * 2, QRegion.Ellipse))
+            # 目标完成度胶囊同样要占输入区：它是可见内容，漏掉会让点击穿到
+            # 下方窗口；反过来若在收起时也算进来，会在屏幕边缘留死区。
+            if self._chip_p > 0.01:
+                for kind in ("water", "stand"):
+                    r = self._chip_rect(kind)
+                    region = region.united(QRegion(
+                        int(r.left()), int(r.top()),
+                        int(r.width()) + 1, int(r.height()) + 1))
         # 胶囊只在真正可见时才占输入区，否则会在屏幕顶部留下一条点击死区。
         if self._bubble_alpha > 0.01 and self._bubble_text:
             region = region.united(QRegion(
@@ -1329,7 +1551,9 @@ class FloatingOrb(QWidget):
         return pm
 
     def _move_to_default(self) -> None:
-        screen = QApplication.primaryScreen()
+        # 多屏环境下 primaryScreen() 未必是用户正在看的那块；离屏救回时
+        # 跟鼠标/主屏，避免球被送到用户没在看的角落。
+        screen = _target_screen_for(self, prefer_cursor=True)
         if screen is None:
             return
         area = screen.availableGeometry()
@@ -1362,15 +1586,55 @@ class FloatingOrb(QWidget):
         self._refresh_mask()
         self.update()
 
+    # ---------------------------- 唤醒自愈 ---------------------------- #
+
+    def refresh_after_wake(self) -> None:
+        """息屏唤醒后重建分层窗口表面，并把球拉回可见区。
+
+        FloatingOrb 是 WA_TranslucentBackground 的 WS_EX_LAYERED 顶层窗口，
+        显示器休眠会让它的绘制表面失效；Qt 仍认为 visible，但屏幕上什么都
+        没有。隐藏→显示会强制重建 backing store，是最稳的恢复手段。
+
+        锁屏 / 息屏时 Windows 还可能把 Qt.Tool 窗真正 hide 掉——此时必须
+        先 show，再走表面重建，否则球会一直消失。
+
+        但展开 / 收起动画进行中不能 hide/show——那会打断动画并让
+        _expand 停在中间值。此时只做几何校正与重绘，等动画结束再说。
+        """
+        # 系统可能已把 Tool 窗藏掉；不先 show 的话后续重建会直接跳过。
+        if not self.isVisible():
+            self.show()
+
+        # 必须在钳制之前判断：clamp_onto_screen 会先把窗口拉进屏幕，
+        # 之后再查 is_off_screen 永远是 False。
+        was_off = is_off_screen(self)
+        if was_off:
+            # 整颗球已在所有屏幕之外：直接回默认右下角，比贴到左上角
+            # 更符合用户对「球回来了」的预期。
+            self._move_to_default()
+        else:
+            clamp_onto_screen(self, margin=32)
+
+        animating = (
+            self._expand_anim.state() != QAbstractAnimation.Stopped
+            or self._bubble_anim.state() != QAbstractAnimation.Stopped
+        )
+        if not animating:
+            refresh_native_window(self, force=True)
+
+        # 尺寸/位置可能已随分辨率变化，遮罩与左右布局都要重算。
+        self._update_side(compensate=False)
+        self._refresh_mask()
+        _send_wake_redraw(self)
+        self.raise_()
+        self.update()
+
     # ---------------------------- 状态同步 ---------------------------- #
 
     def _update_tooltip(self) -> None:
-        if not self._running:
-            primary = "左键打开"
-        else:
-            primary = "左键继续" if self._paused else "左键暂停"
+        # 悬浮球不再承担暂停 / 继续，提示里只描述仍然存在的手势。
         self.setToolTip(
-            f"健康生活小助手\n{primary} · 悬停主球展开打卡 · 拖动移动 · 右键菜单")
+            "健康生活小助手\n左键打开主窗口 · 悬停主球展开打卡 · 拖动移动 · 右键菜单")
 
     def set_progress(self, water: float, sed: float, running: bool) -> None:
         """传入剩余时间比例：1 = 刚到起点，0 = 到点。暂停时数值自然冻结。"""
@@ -1382,6 +1646,22 @@ class FloatingOrb(QWidget):
         self._sed_ratio = sed
         if changed:
             self._update_tooltip()
+        self.update()
+
+    def set_goals(self, done_water: int, goal_water: int,
+                  done_stand: int, goal_stand: int) -> None:
+        """推入今日完成量与目标，供子球旁的目标完成度胶囊显示。
+
+        只做展示：本类不读写 Settings，统计仍由 MainWindow 唯一持有。
+        数值未变时不重绘，避免每次 tick 都触发一次整窗合成。
+        """
+        new = (int(done_water), int(goal_water),
+               int(done_stand), int(goal_stand))
+        if new == (self._done_water, self._goal_water,
+                   self._done_stand, self._goal_stand):
+            return
+        self._done_water, self._goal_water = new[0], new[1]
+        self._done_stand, self._goal_stand = new[2], new[3]
         self.update()
 
     def set_paused(self, paused: bool) -> None:
@@ -1397,6 +1677,7 @@ class FloatingOrb(QWidget):
             # 收起后鼠标可能仍压在主球上，清掉悬停记录，下次移动才能重新展开。
             self._hover_kind = None
         self._update_tooltip()
+        self._sync_ball_scale()
         self.click_feedback()
         self.update()
 
@@ -1407,6 +1688,7 @@ class FloatingOrb(QWidget):
         self._alerts.add(kind)
         if not self._alert_timer.isActive():
             self._alert_timer.start()
+        self._sync_ball_scale()
         self.update()
 
     def clear_alert(self, kind: Optional[str] = None) -> None:
@@ -1417,6 +1699,7 @@ class FloatingOrb(QWidget):
         if not self._alerts:
             self._alert_timer.stop()
             self._alert_phase = 0.0
+        self._sync_ball_scale()
         self.update()
 
     def _alert_kind(self) -> Optional[str]:
@@ -1452,6 +1735,7 @@ class FloatingOrb(QWidget):
         self._feedback_kind = kind
         self._feedback_step = 0
         self._feedback_timer.start()
+        self._sync_ball_scale()
         self.update()
 
     def _advance_feedback(self) -> None:
@@ -1459,11 +1743,41 @@ class FloatingOrb(QWidget):
         if self._feedback_step >= 26:
             self._feedback_timer.stop()
             self._feedback_kind = None
+            self._sync_ball_scale()
         self.update()
 
     def _on_hover_value(self, value) -> None:
         self._hover = float(value)
         self.update()
+
+    def _on_ball_value(self, value) -> None:
+        """缩放动画每一帧：输入热区必须跟着视觉半径走。
+
+        若只缩放绘制而保留 54px 的固定遮罩，常态小球周围会留下一圈
+        看不见却吃掉点击的透明区域，正是「悬浮球面积太大」的体感来源。
+        """
+        self._ball_scale = float(value)
+        self._refresh_mask()
+        self.update()
+
+    def _sync_ball_scale(self) -> None:
+        """按交互状态决定主球大小，只在目标变化时重启动画。
+
+        放大条件：鼠标在主球 / 子球 / 胶囊上、提醒正在闪烁、打卡回执或
+        图标反馈还在播放。其余时刻回到 0.5 倍半径。
+        """
+        active = (self._hover_kind is not None
+                  or bool(self._alerts)
+                  or self._bubble_alpha > 0.01
+                  or self._feedback_kind is not None)
+        target = self.BALL_ACTIVE if active else self.BALL_IDLE
+        if target == self._ball_target:
+            return
+        self._ball_target = target
+        self._ball_anim.stop()
+        self._ball_anim.setStartValue(self._ball_scale)
+        self._ball_anim.setEndValue(target)
+        self._ball_anim.start()
 
     def _animate_hover(self, target: float) -> None:
         self._hover_anim.stop()
@@ -1483,6 +1797,9 @@ class FloatingOrb(QWidget):
 
     def _on_expand_value(self, value) -> None:
         self._expand = float(value)
+        # 胶囊比子球晚一点点出现：0.35 之后才开始淡入并右移/左移到位，
+        # 避免三块内容同时炸开显得乱。
+        self._chip_p = max(0.0, min(1.0, (self._expand - 0.35) / 0.65))
         # 收起动画期间子球还没回到主球，遮罩必须跟着缩，不能立刻裁掉。
         self._refresh_mask()
         self.update()
@@ -1490,6 +1807,7 @@ class FloatingOrb(QWidget):
     def _on_expand_done(self) -> None:
         if not self._expanded:
             self._expand = 0.0
+            self._chip_p = 0.0
             self._refresh_mask()
             self.update()
 
@@ -1503,6 +1821,7 @@ class FloatingOrb(QWidget):
 
     def _on_bubble_value(self, value) -> None:
         self._bubble_alpha = float(value)
+        self._sync_ball_scale()
         self._refresh_mask()
         self.update()
 
@@ -1537,6 +1856,7 @@ class FloatingOrb(QWidget):
             self._hover_kind = kind
             self._hovered = kind is not None
             self._animate_hover(1.0 if kind is not None else 0.0)
+        self._sync_ball_scale()
         if kind is not None:
             self._hide_timer.stop()
             if kind == "main":
@@ -1556,6 +1876,7 @@ class FloatingOrb(QWidget):
         self._hover_kind = None
         self._hovered = False
         self._animate_hover(0.0)
+        self._sync_ball_scale()
         if self._expanded:
             self._hide_timer.start(self.HIDE_DELAY_MS)
         self.update()
@@ -1640,7 +1961,10 @@ class FloatingOrb(QWidget):
         # 会同步放大，不会留下细线小图标配大球的违和感。
         k = self.BALL / 60.0
         # 微缩放只改变绘制，不改变窗口与命中半径；展开时轻微回落让出视觉焦点。
-        scale = 1.0 + 0.08 * self._hover - 0.06 * max(0.0, min(1.0, self._expand))
+        # 再乘上常态 / 交互态的主球倍率：0.5 是安静待机，1.0 是悬停或提醒。
+        scale = ((1.0 + 0.08 * self._hover
+                  - 0.06 * max(0.0, min(1.0, self._expand)))
+                 * self._ball_scale)
         p.save()
         p.translate(center)
         p.scale(scale, scale)
@@ -1664,12 +1988,9 @@ class FloatingOrb(QWidget):
             # 水滴上下浮动、人形小幅跳跃；v0.0.18 幅度加大，让闪动更醒目。
             icon_dy = (-4.5 if kind == "drop" else -6.5) * ph * k
         if kind is None:
-            if self._paused:
-                kind = "play" if self._hover_kind == "main" else "pause"
-            elif self._running and self._hover_kind == "main":
-                kind = "pause"            # 明示单击将暂停
-            else:
-                kind = "logo"
+            # 悬浮球不再有暂停 / 继续手势，恒显示 logo。暂停状态只通过
+            # 下方进度弧变淡体现；暂停入口保留在主界面与托盘菜单。
+            kind = "logo"
 
         if kind in ("drop", "person"):
             p.setPen(Qt.NoPen)
@@ -1679,24 +2000,6 @@ class FloatingOrb(QWidget):
             draw_glyph(p, inner, kind, QColor(255, 255, 255))
         else:
             self._draw_logo(p, base)
-            if kind in ("pause", "play"):
-                # 保留 logo，只覆盖半透明深色层，不用实心灰球替换。
-                p.setPen(Qt.NoPen)
-                p.setBrush(QColor(30, 41, 59, 166))
-                p.drawEllipse(base)
-                p.setBrush(QColor(255, 255, 255))
-                c = base.center()
-                if kind == "pause":
-                    p.drawRoundedRect(QRectF(c.x() - 10 * k, c.y() - 11 * k,
-                                             7 * k, 22 * k), 3 * k, 3 * k)
-                    p.drawRoundedRect(QRectF(c.x() + 3 * k, c.y() - 11 * k,
-                                             7 * k, 22 * k), 3 * k, 3 * k)
-                else:
-                    p.drawPolygon(QPolygonF([
-                        QPointF(c.x() - 7 * k, c.y() - 12 * k),
-                        QPointF(c.x() + 12 * k, c.y()),
-                        QPointF(c.x() - 7 * k, c.y() + 12 * k),
-                    ]))
 
         # 半透明高光内描边，强化球体与深色壁纸之间的分离感。
         p.setPen(QPen(QColor(255, 255, 255, 170), 1.5 * k))
@@ -1844,8 +2147,7 @@ class FloatingOrb(QWidget):
                 draw_glyph(p, inner, "drop" if kind == "water" else "person",
                            QColor(255, 255, 255))
 
-            if alerted and self._expand > 0.8:
-                # v0.0.18：彩色涟漪向外扩散并淡出，配合更亮的白边，
+            if alerted and self._expand > 0.8:                # v0.0.18：彩色涟漪向外扩散并淡出，配合更亮的白边，
                 # 让「该点哪颗球」在一屏里也能一眼看到。
                 ripple = QColor(self.BLUE if kind == "water" else self.ORANGE)
                 ripple.setAlpha(max(0, int(120 * (1.0 - ph))))
@@ -1859,6 +2161,73 @@ class FloatingOrb(QWidget):
                 p.setBrush(Qt.NoBrush)
                 p.drawEllipse(rect.adjusted(-2.5, -2.5, 2.5, 2.5))
             p.restore()
+
+    def _draw_chip(self, p: QPainter, kind: str) -> None:
+        """子球旁的目标完成度胶囊：百分比 + 已完成 / 目标两行明细。
+
+        底色用对应主题色的低透明度渐变，右端（靠主球一侧）渐隐，视觉上
+        像从子球延伸出来的一条，而不是贴在旁边的独立卡片。
+        """
+        if self._chip_p <= 0.01:
+            return
+        rect = self._chip_rect(kind)
+        # 淡入同时从子球一侧滑出 ~8px，跟随弹出节奏。
+        slide = (1.0 - self._chip_p) * 8.0
+        rect = rect.translated(-slide if self._right_side else slide, 0.0)
+
+        accent = QColor(self.BLUE if kind == "water" else self.ORANGE)
+        p.save()
+        p.setOpacity(self._chip_p)
+
+        # 底：白 + 主题色淡染，靠子球一端更浓
+        bg = QLinearGradient(rect.topLeft(), rect.topRight())
+        if self._right_side:
+            bg.setColorAt(0.0, QColor(accent.red(), accent.green(), accent.blue(), 26))
+            bg.setColorAt(0.45, QColor(255, 255, 255, 243))
+            bg.setColorAt(1.0, QColor(255, 255, 255, 250))
+        else:
+            bg.setColorAt(0.0, QColor(255, 255, 255, 250))
+            bg.setColorAt(0.55, QColor(255, 255, 255, 243))
+            bg.setColorAt(1.0, QColor(accent.red(), accent.green(), accent.blue(), 26))
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(bg))
+        p.drawRoundedRect(rect, self.CHIP_H / 2.0, self.CHIP_H / 2.0)
+        # 极细描边压住白底与浅色背景糊在一起的问题
+        edge = QColor(accent.red(), accent.green(), accent.blue(), 60)
+        p.setPen(QPen(edge, 1.0))
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5),
+                          self.CHIP_H / 2.0, self.CHIP_H / 2.0)
+
+        pct_text, first, second, pct_w, detail_w = self._chip_metrics(kind)
+
+        # 按文字实际宽度紧排：左右各 CHIP_PAD，百分比与明细之间固定
+        # CHIP_TEXT_GAP，不再因为「0% / 已喝 0ml」而在中间留一大段空白。
+        if self._right_side:
+            # 主球靠右 → 百分比在左、明细在右
+            pct_x = rect.left() + self.CHIP_PAD
+            detail_x = pct_x + pct_w + self.CHIP_TEXT_GAP
+        else:
+            detail_x = rect.left() + self.CHIP_PAD
+            pct_x = detail_x + detail_w + self.CHIP_TEXT_GAP
+        pct_rect = QRectF(pct_x, rect.top(), pct_w + 2, rect.height())
+        p.setFont(ui_font(17, True))
+        p.setPen(accent)
+        p.drawText(pct_rect, Qt.AlignLeft | Qt.AlignVCenter, pct_text)
+
+        # 明细两行：第一行「已喝 1200ml」，第二行「目标 1900ml」灰字
+        detail_font = ui_font(8)
+        p.setFont(detail_font)
+        fm_d = QFontMetrics(detail_font)
+        line_h = fm_d.height()
+        top = rect.center().y() - line_h
+        p.setPen(QColor("#334155"))
+        p.drawText(QRectF(detail_x, top, detail_w + 4, line_h),
+                   Qt.AlignLeft | Qt.AlignVCenter, first)
+        p.setPen(QColor("#94A3B8"))
+        p.drawText(QRectF(detail_x, top + line_h, detail_w + 4, line_h),
+                   Qt.AlignLeft | Qt.AlignVCenter, second)
+        p.restore()
 
     def _draw_bubble(self, p: QPainter) -> None:
         if self._bubble_alpha <= 0.01 or not self._bubble_text:
@@ -1882,9 +2251,15 @@ class FloatingOrb(QWidget):
         p.setRenderHint(QPainter.TextAntialiasing, True)
 
         c = self._main_center()
-        p.drawPixmap(QPointF(c.x() - self._shadow_main.width() / 2,
-                             c.y() - self._shadow_main.height() / 2),
-                     self._shadow_main)
+        # 阴影是预生成位图，绘制时按主球倍率缩放，否则小球配大阴影会显得脏。
+        sw = self._shadow_main.width() * self._ball_scale
+        sh = self._shadow_main.height() * self._ball_scale
+        p.drawPixmap(QRectF(c.x() - sw / 2, c.y() - sh / 2, sw, sh),
+                     self._shadow_main, QRectF(self._shadow_main.rect()))
+        # 顺序：胶囊 → 子球 → 主球 → 顶部气泡。胶囊先画，让子球压住它的
+        # 内端，视觉上像从子球延伸出来的一条，而不是插在子球下面。
+        for kind in ("water", "stand"):
+            self._draw_chip(p, kind)
         self._draw_satellites(p)
         self._draw_main(p)
         self._draw_bubble(p)
@@ -1970,6 +2345,13 @@ class MainWindow(QWidget):
         self._next_water = 0.0
         self._pending_kind: Optional[str] = None
         self._tray_hinted = False
+        self._recover_pending = False   # 唤醒恢复合并触发用
+        # 启动阶段窗口几何尚未稳定，此时绝不能跑唤醒自愈——否则会把
+        # 还没定位好的悬浮球钳到屏幕角落。等界面完全起来再允许。
+        self._wake_ready = False
+        self._wake_hooks_ready = False  # 会话/显示器通知是否已注册
+        self._power_notify = None       # RegisterPowerSettingNotification 句柄
+        QTimer.singleShot(1500, lambda: setattr(self, "_wake_ready", True))
 
         # 本次会话记录（用于报告）
         self._session_start: Optional[datetime] = None
@@ -2153,22 +2535,54 @@ class MainWindow(QWidget):
         self.act_stand = menu.addAction("起身了", lambda: self._log_stand())
         menu.addSeparator()
         # 与主界面「结束」按钮等价：无需打开主窗口，右键悬浮球即可收尾并出报告。
-        # 悬浮球与托盘共用此菜单，两处右键都会有这一项（槽函数内部已判 running）。
+        # 该 QAction 会同时挂到托盘与悬浮球两份菜单上（槽函数内部已判 running）。
         self.act_stop = menu.addAction("结束", self._stop)
         # 用 lambda 包一层：addAction 会把 triggered 的 bool 传进第一个形参
-        menu.addAction("今日清零", lambda: self._reset_today())
+        self.act_reset = menu.addAction("今日清零", lambda: self._reset_today())
         menu.addSeparator()
-        menu.addAction("退出", self._quit)
+        self.act_quit = menu.addAction("退出", self._quit)
         self.tray.setContextMenu(menu)
         self.tray.show()
 
+        # 悬浮球专用菜单：完全不提供「开始 / 暂停 / 继续」。
+        # 其余项复用同一批 QAction 对象，可用状态与槽函数仍由
+        # _refresh_buttons 统一同步，两份菜单不会出现状态不一致。
+        orb_menu = QMenu(self)
+        self._orb_menu = orb_menu
+        orb_menu.addAction(self.act_show)
+        orb_menu.addSeparator()
+        orb_menu.addAction(self.act_sip)
+        orb_menu.addAction(self.act_stand)
+        orb_menu.addSeparator()
+        orb_menu.addAction(self.act_stop)
+        orb_menu.addAction(self.act_reset)
+        orb_menu.addSeparator()
+        orb_menu.addAction(self.act_quit)
+        for m in (menu, orb_menu):
+            m.aboutToShow.connect(self._refresh_buttons)
+
     def _build_floating(self) -> None:
-        # 与托盘共用同一个 QMenu：菜单项的可用状态、文案和槽函数始终一致。
+        # 悬浮球使用不含暂停项的专用菜单；托盘仍用完整的 _menu。
         self.floating = FloatingOrb(
-            self._on_floating_primary, self._menu, self._on_orb_checkin)
-        # 每次从托盘或悬浮球展开菜单前都重新同步，暂停时记录项必定禁用。
-        self._menu.aboutToShow.connect(self._refresh_buttons)
+            self._on_floating_primary, self._orb_menu, self._on_orb_checkin)
         self.floating.show()
+        # 息屏唤醒后显示器可能换了分辨率 / DPI，窗口坐标会失效；
+        # 接上屏幕变更信号，让窗口重新贴合当前可用区。
+        app = QApplication.instance()
+        if app is not None:
+            app.screenAdded.connect(lambda *_: self._recover_after_wake())
+            # 拔掉副屏时 geometryChanged 不一定会在剩余屏上触发，窗口会
+            # 留在幽灵坐标：托盘还在，界面「打不开」。必须监听 screenRemoved。
+            if hasattr(app, "screenRemoved"):
+                app.screenRemoved.connect(lambda *_: self._recover_after_wake())
+            for screen in app.screens():
+                screen.geometryChanged.connect(
+                    lambda *_args: self._recover_after_wake())
+                screen.availableGeometryChanged.connect(
+                    lambda *_args: self._recover_after_wake())
+            # ApplicationStateChange 只发给 QApplication，挂在 MainWindow
+            # 的 changeEvent 上永远到不了；这里接官方信号覆盖解锁 / 回前台。
+            app.applicationStateChanged.connect(self._on_app_state_changed)
 
     def _on_orb_checkin(self, kind: str) -> Optional[str]:
         """悬浮球子球打卡：返回顶部胶囊文案，None 表示当前不可记录。
@@ -2192,13 +2606,20 @@ class MainWindow(QWidget):
         return None
 
     def _on_floating_primary(self) -> None:
-        """悬浮球单击：运行中暂停，暂停中继续；尚未开始时打开主窗口。"""
-        if self.running:
-            self._toggle_pause()
-        else:
-            self._show_window()
+        """悬浮球单击：一律打开主窗口。
+
+        暂停 / 继续只保留在主界面按钮与托盘菜单；悬浮球上的这条路径已完全
+        移除，避免误点把计时停掉。
+        """
+        self.floating.click_feedback()
+        self._show_window()
 
     def _update_floating_progress(self) -> None:
+        # 目标完成度与倒计时弧同在一条同步链上，保证悬浮球与主界面不出现
+        # 「圆环变了、球旁百分比没变」的不一致。
+        self.floating.set_goals(self.settings.today_ml, self.settings.goal_ml,
+                                self.settings.today_stands,
+                                self.settings.goal_stands)
         if not self.running:
             self.floating.set_progress(1.0, 1.0, False)
             return
@@ -2645,13 +3066,59 @@ class MainWindow(QWidget):
             self._show_window()
 
     def _show_window(self) -> None:
-        self.show()
+        # 息屏唤醒 / 分辨率变化后，旧坐标可能落在屏幕外，必须先把窗口
+        # 拉回可见区，否则 show() 成功却看不见——表现为「点了没反应」。
+        # 整窗都在屏幕外时居中弹出；只是探出边缘时做最小位移钳制。
+        # 右上角「–」走的是 showMinimized()：窗口处于最小化态时 show() /
+        # raise_() 都不会把它还原，托盘双击就表现为「打不开界面」。
+        if self.isMinimized():
+            self.setWindowState(
+                (self.windowState() & ~Qt.WindowMinimized) | Qt.WindowActive)
+        # 托盘唤起：跟鼠标所在屏救回，防止停在已断开显示器的幽灵坐标。
+        self._ensure_on_screen(prefer_cursor=True)
+        self.showNormal()
+        # 再保险一次——show 之后几何才稳定，离屏则强制居中到鼠标屏。
+        if is_off_screen(self):
+            center_on_screen(self, prefer_cursor=True)
+        # 分层窗口表面在休眠后会失效，重建一次并补一次原生重绘。
+        refresh_native_window(self, force=True)
+        _send_wake_redraw(self)
+        # 托盘唤起时一并救回悬浮球：息屏后 Tool 窗常被系统藏掉，
+        # 只恢复主窗口会留下「界面开了但球没了」。
+        orb = getattr(self, "floating", None)
+        if orb is not None:
+            orb.refresh_after_wake()
+        # 置前必须放在最后：上面的 hide/show 重建会让 Z 序回落。
+        self._bring_to_front()
+
+    def _bring_to_front(self) -> None:
+        """还原 + 置前。没有前台权限时也要保证窗口不被别的程序压住。"""
         self.raise_()
         self.activateWindow()
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            # HWND / HWND_TOPMOST(-1) / HWND_NOTOPMOST(-2) 都按指针宽度传；
+            # 直接传 Python int 在 64 位下会被截成 32 位，系统报 1400 无效句柄。
+            h = ctypes.c_void_p(int(self.winId()))
+            if user32.IsIconic(h):
+                user32.ShowWindow(h, 9)                       # SW_RESTORE
+            # SetForegroundWindow 在后台进程里会静默失败，窗口被压在其它程序
+            # 后面，看起来像「双击托盘没反应」。临时置顶再取消，只调 Z 序、
+            # 不改 Qt 窗口标志。
+            flags = 0x0001 | 0x0002 | 0x0040                  # NOSIZE|NOMOVE|SHOWWINDOW
+            user32.SetWindowPos(h, ctypes.c_void_p(-1), 0, 0, 0, 0, flags)
+            user32.SetWindowPos(h, ctypes.c_void_p(-2), 0, 0, 0, 0, flags)
+            user32.SetForegroundWindow(h)
+        except Exception:
+            pass
 
     def _quit(self) -> None:
         # 直接退出也视为本次使用结束：清空当日累计，下次打开从零开始
         self._reset_today(notify=False)
+        self._teardown_wake_hooks()
         self.toast.hide()
         self.tray.hide()
         self.floating.close()
@@ -2665,9 +3132,180 @@ class MainWindow(QWidget):
             self.tray.showMessage(APP_NAME, "已最小化到托盘，双击图标可恢复。",
                                   QSystemTrayIcon.Information, 2000)
 
+    # ---- 息屏 / 唤醒 / 显示变更后的自愈 ----
+
+    def _on_app_state_changed(self, state) -> None:
+        # QApplication.applicationStateChanged：解锁、点回应用等会到 Active。
+        if state == Qt.ApplicationActive:
+            QTimer.singleShot(0, self._recover_after_wake)
+
+    def _ensure_wake_hooks(self) -> None:
+        """注册会话解锁 / 显示器亮起通知（只需一次，依赖真实 HWND）。"""
+        if sys.platform != "win32" or getattr(self, "_wake_hooks_ready", False):
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            hwnd = int(self.winId())
+            if not hwnd:
+                return
+
+            # 会话解锁：纯锁屏（Win+L）不会发 APM resume，必须靠这条。
+            ctypes.windll.wtsapi32.WTSRegisterSessionNotification(hwnd, 0)
+
+            class GUID(ctypes.Structure):
+                _fields_ = [
+                    ("Data1", wintypes.DWORD),
+                    ("Data2", wintypes.WORD),
+                    ("Data3", wintypes.WORD),
+                    ("Data4", wintypes.BYTE * 8),
+                ]
+
+            # GUID_CONSOLE_DISPLAY_STATE = 6fe69556-704a-47a0-8f24-c28d936fda47
+            guid = GUID(0x6fe69556, 0x704a, 0x47a0,
+                        (wintypes.BYTE * 8)(
+                            0x8f, 0x24, 0xc2, 0x8d, 0x93, 0x6f, 0xda, 0x47))
+            # DEVICE_NOTIFY_WINDOW_HANDLE = 0
+            handle = ctypes.windll.user32.RegisterPowerSettingNotification(
+                hwnd, ctypes.byref(guid), 0)
+            self._power_notify = handle or None
+            self._wake_hooks_ready = True
+        except Exception:
+            # 注册失败不致命：仍有 applicationStateChanged / APM / 屏幕几何。
+            self._wake_hooks_ready = False
+
+    def _teardown_wake_hooks(self) -> None:
+        if sys.platform != "win32" or not getattr(self, "_wake_hooks_ready", False):
+            return
+        try:
+            import ctypes
+            hwnd = int(self.winId())
+            ctypes.windll.wtsapi32.WTSUnRegisterSessionNotification(hwnd)
+            handle = getattr(self, "_power_notify", None)
+            if handle:
+                ctypes.windll.user32.UnregisterPowerSettingNotification(handle)
+            self._power_notify = None
+            self._wake_hooks_ready = False
+        except Exception:
+            pass
+
+    @staticmethod
+    def _is_display_on_power_setting(lparam) -> bool:
+        """解析 PBT_POWERSETTINGCHANGE：显示器亮起 / 变暗时返回 True。"""
+        if not lparam:
+            return False
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class GUID(ctypes.Structure):
+                _fields_ = [
+                    ("Data1", wintypes.DWORD),
+                    ("Data2", wintypes.WORD),
+                    ("Data3", wintypes.WORD),
+                    ("Data4", wintypes.BYTE * 8),
+                ]
+
+            class POWERBROADCAST_SETTING(ctypes.Structure):
+                _fields_ = [
+                    ("PowerSetting", GUID),
+                    ("DataLength", wintypes.DWORD),
+                    ("Data", wintypes.BYTE * 1),
+                ]
+
+            pbs = ctypes.cast(
+                int(lparam), ctypes.POINTER(POWERBROADCAST_SETTING)).contents
+            g = pbs.PowerSetting
+            if (g.Data1 != 0x6fe69556 or g.Data2 != 0x704a or g.Data3 != 0x47a0
+                    or bytes(g.Data4) != bytes(
+                        [0x8f, 0x24, 0xc2, 0x8d, 0x93, 0x6f, 0xda, 0x47])):
+                return False
+            if pbs.DataLength < 1:
+                return False
+            # 0=关，1=开，2=变暗；亮起或变暗都重建一次分层表面。
+            return pbs.Data[0] in (1, 2)
+        except Exception:
+            return False
+
+    def nativeEvent(self, event_type, message):
+        """监听电源 / 会话消息：唤醒后把丢掉的图层表面重建回来。
+
+        - WM_POWERBROADCAST + PBT_APMRESUMESUSPEND/AUTOMATIC：系统睡眠恢复
+        - WM_POWERBROADCAST + PBT_POWERSETTINGCHANGE：显示器亮起（纯息屏）
+        - WM_WTSSESSION_CHANGE + WTS_SESSION_UNLOCK/LOGON：锁屏解锁
+        此时 WS_EX_LAYERED 的绘制表面已失效，必须主动重建，否则
+        悬浮球与主窗口会「在，但全透明看不见」。
+        """
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                from ctypes import wintypes
+                msg = ctypes.cast(int(message),
+                                  ctypes.POINTER(wintypes.MSG)).contents
+                if msg.message == 0x0218:          # WM_POWERBROADCAST
+                    if msg.wParam in (0x7, 0x12):  # RESUMESUSPEND / RESUMEAUTOMATIC
+                        QTimer.singleShot(0, self._recover_after_wake)
+                    elif msg.wParam == 0x8013:     # PBT_POWERSETTINGCHANGE
+                        if self._is_display_on_power_setting(msg.lParam):
+                            QTimer.singleShot(0, self._recover_after_wake)
+                elif msg.message == 0x02B1:        # WM_WTSSESSION_CHANGE
+                    # 0x8 = WTS_SESSION_UNLOCK，0x5 = WTS_SESSION_LOGON
+                    if msg.wParam in (0x8, 0x5):
+                        QTimer.singleShot(0, self._recover_after_wake)
+            except Exception:
+                pass
+        return super().nativeEvent(event_type, message)
+
+    def _recover_after_wake(self) -> None:
+        """唤醒后统一恢复：主窗口钳回屏幕、悬浮球重建、浮层刷新。
+
+        通过 `_recover_pending` 合并短时间内的重复触发（电源广播 + 状态变更
+        + 屏幕几何变更可能接踵而来），避免连续 hide/show 打断展开 / 收起
+        动画。同时若悬浮球正在动画中，只做几何校正与重绘，不重建表面。
+        """
+        if not getattr(self, "_wake_ready", False):
+            return          # 启动阶段不跑自愈，等窗口几何稳定
+        if getattr(self, "_recover_pending", False):
+            return
+        self._recover_pending = True
+        QTimer.singleShot(120, self._do_recover_after_wake)
+
+    def _ensure_on_screen(self, prefer_cursor: bool = False) -> None:
+        """整窗离屏就居中救回，只是探出边缘就做最小位移钳制。
+
+        prefer_cursor：从托盘唤起时跟鼠标所在屏，避免救到用户没在看的副屏。
+        """
+        if is_off_screen(self):
+            center_on_screen(self, prefer_cursor=prefer_cursor)
+        else:
+            clamp_onto_screen(self)
+
+    def _do_recover_after_wake(self) -> None:
+        self._recover_pending = False
+        # 主窗口：只在它本来就可见时处理，收在托盘时不要强行弹出来。
+        if self.isVisible():
+            self._ensure_on_screen()
+            refresh_native_window(self)
+            _send_wake_redraw(self)
+        # 悬浮球常驻，唤醒后必须无条件救回，否则用户连球都看不到。
+        # 注意：不要在这里先 clamp，否则 refresh_after_wake 内部的
+        # is_off_screen 判断永远为 False，「整颗球跑到屏幕外 → 回默认
+        # 右下角」的兜底逻辑就失效了。几何校正由 refresh_after_wake 自己做。
+        orb = getattr(self, "floating", None)
+        if orb is not None:
+            orb.refresh_after_wake()
+        # 浮层若正在显示，也一起救回来。
+        if self.toast.isVisible():
+            self.toast.raise_()
+            _send_wake_redraw(self.toast)
+        self.update()
+
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self.setFocus()      # 焦点留在窗口上，避免启动时输入框出现蓝色光标
+        # HWND 就绪后再注册会话 / 显示器通知；重复 show 时内部有 once 守卫。
+        self._ensure_wake_hooks()
 
 
 # ------------------------------ 入口 ------------------------------ #

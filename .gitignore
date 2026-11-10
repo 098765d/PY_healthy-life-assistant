@@ -1,22 +1,45 @@
-# Python
+﻿# Python
 __pycache__/
 *.py[cod]
-*.egg-info/
-.venv/
+*$py.class
+*.pyo
+.Python
 venv/
+.venv/
+env/
+.env/
 
-# PyInstaller
+# Backups / local edits
+*.bak
+*.bak_*
+*~
+
+# PyInstaller / build artifacts
 build/
 dist/
-*.manifest
+*.spec.bak
 
-# 本地环境 / 编辑器
+# IDE / tooling
 .vscode/
 .idea/
+.slidep/
+.workbuddy-ai/
+*.log
+
+# OS
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# 本地配置与数据（不该进仓库）
+# Large media / promo (not needed for source)
+*.mp4
+*.pptx
+*.pdf
+
+# Local test harness (optional; keep out of repo by default)
+**/wake_test/
+
+# App runtime data (lives under %APPDATA%, but just in case)
 settings.json
 log.csv
-report_*.html
+报告/
