@@ -13,7 +13,7 @@
 把 `健康生活小助手.exe` 从压缩包（如果有）里**解压出来**，放到一个固定的文件夹，比如 `D:\软件\健康生活小助手\`。
 不要直接在压缩包里双击运行，也不要留在「下载」文件夹里——以后容易误删。
 
-> 从 GitHub 下载到的文件名是 `HealthyLifeAssistant.exe`，就是它本体；改成 `健康生活小助手.exe` 也一样能用，文件名不影响功能。
+> 绿色单文件 exe 在 [GitHub Releases](https://github.com/098765d/PY_healthy-life-assistant/releases/latest) 下载，文件名是 `健康生活小助手.exe`。以前发布里的 `HealthyLifeAssistant.exe` 是同一程序，改名后一样能用。
 
 **第 2 步　双击运行**
 双击那个 exe。
